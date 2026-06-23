@@ -1,8 +1,8 @@
-"""Entry point — webcam loop with hand tracking + finger-frame detection.
+"""Entry point — webcam loop: hand tracking → finger-frame → summon the demon.
 
-v1: capture → mirror → hand tracking → detect the two-handed finger-frame → draw
-the portal box where the demon will appear. The summon (compositing the demon
-into the box) lands in v2, but this loop stays the spine of the whole thing.
+v2: capture → mirror → hand tracking → detect the two-handed finger-frame →
+composite the demon into the portal box. Press 'd' to toggle the debug overlay
+(skeleton + box). This loop stays the spine as the realism ladder gets climbed.
 
 Run:
     python -m src.main              # open the webcam window
@@ -20,6 +20,7 @@ import time
 import cv2
 
 from . import config
+from .compositor import Compositor
 from .gesture import FrameResult, PortalBox, detect_frame
 from .hand_tracker import HAND_CONNECTIONS, Hand, HandTracker
 
@@ -36,10 +37,10 @@ def open_camera(index: int) -> cv2.VideoCapture:
     return cap
 
 
-def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult) -> None:
+def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool) -> None:
     """Overlay a little heads-up text so the window is informative, not just raw video."""
     h = frame.shape[0]
-    cv2.putText(frame, "demon-dog  |  v1: finger-frame", (16, 32),
+    cv2.putText(frame, "demon-dog  |  v2: summon", (16, 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 180), 2, cv2.LINE_AA)
     if config.SHOW_FPS:
         cv2.putText(frame, f"{fps:4.1f} fps   hands: {n_hands}", (16, 60),
@@ -50,7 +51,8 @@ def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult) -> None:
     cv2.putText(frame, gesture.reason, (16, 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-    cv2.putText(frame, "press q / esc to quit", (16, h - 16),
+    hint = f"q/esc quit   |   d: debug overlay {'ON' if debug else 'OFF'}"
+    cv2.putText(frame, hint, (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
 
@@ -105,7 +107,7 @@ def selftest(index: int, n_frames: int = 5) -> int:
 
 
 def run(index: int) -> int:
-    """Main interactive loop: capture → (mirror) → HUD → display."""
+    """Main interactive loop: capture → mirror → track → detect → summon → display."""
     cap = open_camera(index)
     if not cap.isOpened():
         print(f"ERROR: could not open camera index {index}. "
@@ -115,7 +117,9 @@ def run(index: int) -> int:
 
     prev = time.perf_counter()
     fps = 0.0
+    debug = config.DEBUG_OVERLAY
     tracker = HandTracker()
+    compositor = Compositor()
     try:
         while True:
             ok, frame = cap.read()
@@ -126,15 +130,21 @@ def run(index: int) -> int:
             if config.MIRROR:
                 frame = cv2.flip(frame, 1)
 
-            # Track hands on the same (mirrored) frame we display, so the drawn
-            # landmarks line up with what you see.
+            # Track hands on the same (mirrored) frame we display, so landmarks
+            # and the portal line up with what you see.
             hands = tracker.process(frame)
-            for hand in hands:
-                draw_hand(frame, hand)
-
             gesture = detect_frame(hands, frame.shape)
+
+            # the summon: drop the demon into the portal box
             if gesture.detected and gesture.box is not None:
-                draw_portal(frame, gesture.box)
+                compositor.summon(frame, gesture.box)
+
+            # debug overlays on top (toggle live with 'd')
+            if debug:
+                for hand in hands:
+                    draw_hand(frame, hand)
+                if gesture.detected and gesture.box is not None:
+                    draw_portal(frame, gesture.box)
 
             now = time.perf_counter()
             dt = now - prev
@@ -142,12 +152,14 @@ def run(index: int) -> int:
             if dt > 0:
                 fps = 0.9 * fps + 0.1 * (1.0 / dt)  # smoothed
 
-            draw_hud(frame, fps, len(hands), gesture)
+            draw_hud(frame, fps, len(hands), gesture, debug)
             cv2.imshow(config.WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key in config.QUIT_KEYS:
                 break
+            if key == ord("d"):
+                debug = not debug
             # window closed via the title-bar X
             if cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                 break

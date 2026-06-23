@@ -31,6 +31,10 @@ MIRROR = True            # flip horizontally so the feed reads like a mirror (se
 WINDOW_NAME = "demon-dog"
 SHOW_FPS = True
 QUIT_KEYS = (ord("q"), 27)   # 'q' or ESC
+DEBUG_OVERLAY = True         # draw hand skeleton + portal box (toggle live with 'd')
+
+# --- summon (v2) ---
+DEMON_SCALE = 1.0           # demon size as a fraction of the fitted portal box (tune to taste)
 
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2
