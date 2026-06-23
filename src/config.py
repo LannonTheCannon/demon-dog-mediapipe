@@ -12,6 +12,14 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = ROOT / "assets"
 DEMON_PNG = ASSETS_DIR / "demon.png"
 
+# --- models (MediaPipe Tasks) ---
+MODELS_DIR = ROOT / "models"
+HAND_MODEL_PATH = MODELS_DIR / "hand_landmarker.task"
+HAND_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
+
 # --- camera ---
 CAM_INDEX = 1            # built-in FaceTime camera. (Index 0 is the iPhone Continuity Camera here.)
                          # Run scripts/probe_cameras.py to re-check if this ever changes.

@@ -1,3 +1,7 @@
+# demon-dog: downloaded model artifacts (fetched by scripts/download_model.py)
+models/
+*.task
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
