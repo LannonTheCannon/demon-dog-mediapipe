@@ -1,0 +1,4 @@
+opencv-python>=4.9        # webcam capture, drawing, window/display
+mediapipe>=0.10.14        # hand landmark detection (21 points per hand)
+numpy>=1.26,<2.0          # pinned <2.0 — mediapipe still links against numpy 1.x
+Pillow>=10.0              # generate / handle the transparent demon PNG asset
