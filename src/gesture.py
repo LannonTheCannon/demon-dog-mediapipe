@@ -35,11 +35,18 @@ PINKY_PIP, PINKY_TIP = 18, 20
 
 @dataclass
 class PortalBox:
-    """Axis-aligned box (in pixels) where the demon gets summoned."""
+    """Axis-aligned box (in pixels) where the demon gets summoned.
+
+    `points` holds the four framing fingertips (both thumbs + both index tips),
+    so downstream placement can recover the frame's *orientation*, not just its
+    bounding box.
+    """
     x: int
     y: int
     w: int
     h: int
+    points: tuple[tuple[int, int], ...] = ()
+    angle_deg: float = 0.0   # tilt of the frame's edges (how rotated the "paper" is)
 
     @property
     def center(self) -> tuple[int, int]:
@@ -102,6 +109,35 @@ def is_L_shape(h: Hand) -> bool:
     return curled >= 2
 
 
+def _seg_angle(h: Hand, i: int, j: int) -> float:
+    """Angle (radians) of the landmark i -> j segment, in image coords."""
+    p = h.landmarks_px
+    return math.atan2(p[j][1] - p[i][1], p[j][0] - p[i][0])
+
+
+def _frame_angle_deg(a: Hand, b: Hand) -> float:
+    """Orientation of the frame's edges = how rotated the 'paper rectangle' is.
+
+    The index fingers form the frame's vertical edges and the thumbs the
+    horizontal ones, so each hand gives us two edge directions. We pool all four
+    (rotating thumb directions 90° to line them up with the indexes) and take a
+    circular mean modulo 180° — orientation, not direction, so opposite-pointing
+    fingers on the two hands reinforce instead of cancel. This rotates with your
+    wrists even when your hands stay in place.
+    """
+    angles = []
+    for h in (a, b):
+        angles.append(_seg_angle(h, INDEX_MCP, INDEX_TIP))
+        angles.append(_seg_angle(h, THUMB_IP, THUMB_TIP) + math.pi / 2)
+    sx = sum(math.cos(2 * t) for t in angles)
+    sy = sum(math.sin(2 * t) for t in angles)
+    raw = math.degrees(0.5 * math.atan2(sy, sx))
+    # A level frame has vertical index fingers (raw ~= 90deg); subtract that
+    # reference and wrap into (-90, 90] so a level frame reads 0 and the value is
+    # the frame's absolute tilt from upright.
+    return (raw % 180.0) - 90.0
+
+
 def _portal_from_hands(a: Hand, b: Hand, frame_shape) -> PortalBox:
     """Box spanning the framing fingertips of both hands, with a little padding."""
     keys = [a.landmarks_px[THUMB_TIP], a.landmarks_px[INDEX_TIP],
@@ -117,7 +153,8 @@ def _portal_from_hands(a: Hand, b: Hand, frame_shape) -> PortalBox:
     y0 = max(0, y0 - pad_y)
     x1 = min(w, x1 + pad_x)
     y1 = min(h, y1 + pad_y)
-    return PortalBox(x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+    return PortalBox(x=x0, y=y0, w=x1 - x0, h=y1 - y0,
+                     points=tuple(keys), angle_deg=_frame_angle_deg(a, b))
 
 
 def detect_frame(hands: list[Hand], frame_shape) -> FrameResult:

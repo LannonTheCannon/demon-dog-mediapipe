@@ -8,6 +8,8 @@ video. Tier 1+ (oriented placement, anchored rig, mesh warp) replaces the body o
 
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 
@@ -26,6 +28,20 @@ def _load_rgba(path) -> np.ndarray:
         alpha = np.full(img.shape[:2] + (1,), 255, dtype=img.dtype)
         img = np.concatenate([img, alpha], axis=2)
     return img
+
+
+def _rotate_rgba(img: np.ndarray, deg: float) -> np.ndarray:
+    """Rotate a BGRA image about its center, expanding the canvas so nothing clips.
+    Newly exposed pixels are fully transparent."""
+    h, w = img.shape[:2]
+    cx, cy = w / 2.0, h / 2.0
+    m = cv2.getRotationMatrix2D((cx, cy), deg, 1.0)
+    cos, sin = abs(m[0, 0]), abs(m[0, 1])
+    nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+    m[0, 2] += nw / 2.0 - cx
+    m[1, 2] += nh / 2.0 - cy
+    return cv2.warpAffine(img, m, (nw, nh), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
 
 def overlay_rgba(frame: np.ndarray, overlay: np.ndarray, x: int, y: int) -> None:
@@ -53,9 +69,15 @@ class Compositor:
 
     def __init__(self, asset_path=config.DEMON_PNG) -> None:
         self.demon = _load_rgba(asset_path)
+        self.last_tilt_deg: float = 0.0           # exposed for the debug HUD
 
     def summon(self, frame: np.ndarray, box: PortalBox) -> None:
-        """Scale the demon to fit `box` (preserving aspect) and blend it in, centered."""
+        """Scale the demon to fit `box`, tilt it to match your frame, and blend it in.
+
+        Tier 1 (oriented placement): the demon is a sticker on the paper your hands
+        frame — its angle is the frame's *absolute* tilt, so a frame held tilted
+        gives a tilted demon, with no lock-on or baseline.
+        """
         dh, dw = self.demon.shape[:2]
         if box.w <= 0 or box.h <= 0:
             return
@@ -63,8 +85,14 @@ class Compositor:
         # contain: largest size that fits inside the box, times a tuning factor
         scale = min(box.w / dw, box.h / dh) * config.DEMON_SCALE
         nw, nh = max(1, int(dw * scale)), max(1, int(dh * scale))
-        resized = cv2.resize(self.demon, (nw, nh), interpolation=cv2.INTER_AREA)
+        demon = cv2.resize(self.demon, (nw, nh), interpolation=cv2.INTER_AREA)
 
-        ox = box.x + (box.w - nw) // 2
-        oy = box.y + (box.h - nh) // 2
-        overlay_rgba(frame, resized, ox, oy)
+        if config.ORIENT_ENABLED:
+            self.last_tilt_deg = box.angle_deg * config.ORIENT_SIGN
+            demon = _rotate_rgba(demon, self.last_tilt_deg)
+
+        # center the (possibly rotated, larger) demon on the portal center
+        cx, cy = box.center
+        ox = cx - demon.shape[1] // 2
+        oy = cy - demon.shape[0] // 2
+        overlay_rgba(frame, demon, ox, oy)

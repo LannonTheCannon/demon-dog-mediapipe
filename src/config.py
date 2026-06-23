@@ -36,6 +36,10 @@ DEBUG_OVERLAY = True         # draw hand skeleton + portal box (toggle live with
 # --- summon (v2) ---
 DEMON_SCALE = 1.0           # demon size as a fraction of the fitted portal box (tune to taste)
 
+# --- oriented placement (Tier 1) ---
+ORIENT_ENABLED = True       # rotate the demon to match the finger-frame's tilt
+ORIENT_SIGN = -1.0          # makes the demon turn the SAME way as your frame; flip to +1.0 if reversed
+
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2
 MIN_DETECTION_CONFIDENCE = 0.6

@@ -145,6 +145,8 @@ def run(index: int) -> int:
                     draw_hand(frame, hand)
                 if gesture.detected and gesture.box is not None:
                     draw_portal(frame, gesture.box)
+                    cv2.putText(frame, f"tilt: {compositor.last_tilt_deg:+.0f} deg", (16, 118),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 200, 255), 1, cv2.LINE_AA)
 
             now = time.perf_counter()
             dt = now - prev
