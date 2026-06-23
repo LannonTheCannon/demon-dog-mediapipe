@@ -36,3 +36,8 @@ QUIT_KEYS = (ord("q"), 27)   # 'q' or ESC
 MAX_HANDS = 2
 MIN_DETECTION_CONFIDENCE = 0.6
 MIN_TRACKING_CONFIDENCE = 0.5
+
+# --- finger-frame gesture (v1) ---
+THUMB_SPLAY_RATIO = 0.5   # thumb tip must sit this far from the index knuckle (× hand size) to count as "out"
+PORTAL_PADDING = 0.15     # grow the portal box by this fraction beyond the fingertips
+PORTAL_MIN_FRAC = 0.12    # reject frames smaller than this fraction of the image (hands too close together)
