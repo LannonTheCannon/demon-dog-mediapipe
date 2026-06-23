@@ -41,6 +41,7 @@ class PortalBox:
     angle_deg: float = 0.0
     ear_left: tuple[int, int] = (0, 0)
     ear_right: tuple[int, int] = (0, 0)
+    mouth: tuple[int, int] = (0, 0)    # the puppet's mouth (thumb + folded fingers) — pins the snout
 
     @property
     def center(self) -> tuple[int, int]:
@@ -122,6 +123,14 @@ def detect_fox(hands: list[Hand], frame_shape) -> FrameResult:
 
     x, y, w, hh = _hand_box(h, frame_shape)
     ears = sorted([h.landmarks_px[INDEX_TIP], h.landmarks_px[PINKY_TIP]], key=lambda p: p[0])
+
+    # the puppet's mouth: midpoint of the thumb tip and the folded middle/ring tips
+    tx, ty = h.landmarks_px[THUMB_TIP]
+    mx, my = h.landmarks_px[MIDDLE_TIP]
+    rx, ry = h.landmarks_px[RING_TIP]
+    fold = ((mx + rx) / 2.0, (my + ry) / 2.0)
+    mouth = (int((tx + fold[0]) / 2.0), int((ty + fold[1]) / 2.0))
+
     box = PortalBox(x, y, w, hh, angle_deg=_fox_angle_deg(h),
-                    ear_left=tuple(ears[0]), ear_right=tuple(ears[1]))
+                    ear_left=tuple(ears[0]), ear_right=tuple(ears[1]), mouth=mouth)
     return FrameResult(True, box=box, reason="KON")

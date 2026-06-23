@@ -92,19 +92,26 @@ class Compositor:
         self._summon_oriented(frame, box)
 
     def _summon_anchored(self, frame: np.ndarray, box: PortalBox) -> None:
-        """Tier 3 (anchor rig): pin the demon's ears to your index + pinky tips.
+        """Tier 3 (anchor rig): pin the demon onto your hand.
 
-        A single similarity transform maps the demon's two ear-tips onto the two
-        fingertip 'ears', so position, scale, and rotation are all derived from
-        where your hand actually is — the fox is *held* by your hand.
+        With the snout anchor on, a 3-point affine maps the demon's ears + snout
+        onto your index tip, pinky tip, and mouth — so the *face direction* is
+        locked to your hand, not just floating below the ears. Without it, a
+        2-point similarity pins the ears only.
         """
         h, w = frame.shape[:2]
         dh, dw = self.demon.shape[:2]
         ear_l = (config.DEMON_EAR_L_FRAC[0] * dw, config.DEMON_EAR_L_FRAC[1] * dh)
         ear_r = (config.DEMON_EAR_R_FRAC[0] * dw, config.DEMON_EAR_R_FRAC[1] * dh)
-        target_l, target_r = box.ear_left, box.ear_right
 
-        m = _similarity_matrix(ear_l, ear_r, target_l, target_r)
+        if config.ANCHOR_USE_SNOUT:
+            snout = (config.DEMON_SNOUT_FRAC[0] * dw, config.DEMON_SNOUT_FRAC[1] * dh)
+            src = np.float32([ear_l, ear_r, snout])
+            dst = np.float32([box.ear_left, box.ear_right, box.mouth])
+            m = cv2.getAffineTransform(src, dst)
+        else:
+            m = _similarity_matrix(ear_l, ear_r, box.ear_left, box.ear_right)
+
         warped = cv2.warpAffine(self.demon, m, (w, h), flags=cv2.INTER_LINEAR,
                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
         overlay_rgba(frame, warped, 0, 0)
