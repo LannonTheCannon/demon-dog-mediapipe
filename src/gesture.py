@@ -1,20 +1,13 @@
-"""Finger-frame gesture detection — the heart of the Chainsaw Man effect.
+"""One-handed fox-sign detection — Aki's "Kon" from Chainsaw Man.
 
-A "finger frame" is both hands making an L (thumb + index extended, the other
-three fingers curled), positioned so the two L's outline a rectangle — the way
-you'd frame a shot with your hands. When we see it, we compute the *portal box*:
-the opening between your hands where the demon will be summoned.
+The summon gesture is the kitsune (fox) hand sign on a single hand: index and
+pinky extended as the ears, middle and ring folded down toward the thumb as the
+snout. When we see it we expose the two ear anchors (index tip + pinky tip) so
+the compositor can pin the demon fox's ears to your fingertips.
 
-This module is pure geometry over `Hand` objects — no MediaPipe, no OpenCV — so
-it's easy to reason about and tune. Thresholds live in config.
+Pure geometry over a `Hand` object — no MediaPipe, no OpenCV.
 
-Landmark indices (MediaPipe hand model):
-    0 wrist
-    thumb:  1 cmc, 2 mcp, 3 ip, 4 tip
-    index:  5 mcp, 6 pip, 7 dip, 8 tip
-    middle: 9 mcp, 10 pip, 11 dip, 12 tip
-    ring:   13 mcp, 14 pip, 15 dip, 16 tip
-    pinky:  17 mcp, 18 pip, 19 dip, 20 tip
+Landmark indices: 0 wrist; thumb 1-4; index 5-8; middle 9-12; ring 13-16; pinky 17-20.
 """
 
 from __future__ import annotations
@@ -26,7 +19,7 @@ from . import config
 from .hand_tracker import Hand
 
 WRIST = 0
-THUMB_TIP, THUMB_IP = 4, 3
+THUMB_TIP = 4
 INDEX_MCP, INDEX_PIP, INDEX_TIP = 5, 6, 8
 MIDDLE_MCP, MIDDLE_PIP, MIDDLE_TIP = 9, 10, 12
 RING_PIP, RING_TIP = 14, 16
@@ -35,18 +28,19 @@ PINKY_PIP, PINKY_TIP = 18, 20
 
 @dataclass
 class PortalBox:
-    """Axis-aligned box (in pixels) where the demon gets summoned.
+    """Where/how the demon is summoned for one hand.
 
-    `points` holds the four framing fingertips (both thumbs + both index tips),
-    so downstream placement can recover the frame's *orientation*, not just its
-    bounding box.
+    `ear_left`/`ear_right` are the fingertip anchors (index & pinky tips, ordered
+    left→right) that the demon's ears get pinned to. x/y/w/h bound the hand for
+    the debug box and the oriented fallback.
     """
     x: int
     y: int
     w: int
     h: int
-    points: tuple[tuple[int, int], ...] = ()
-    angle_deg: float = 0.0   # tilt of the frame's edges (how rotated the "paper" is)
+    angle_deg: float = 0.0
+    ear_left: tuple[int, int] = (0, 0)
+    ear_right: tuple[int, int] = (0, 0)
 
     @property
     def center(self) -> tuple[int, int]:
@@ -63,21 +57,16 @@ class PortalBox:
 
 @dataclass
 class FrameResult:
-    """Outcome of a detection pass. `reason` is for the on-screen debug HUD."""
+    """Outcome of a detection pass. `reason` drives the on-screen HUD."""
     detected: bool
     box: PortalBox | None = None
     reason: str = ""
 
 
-# --- low-level geometry helpers (operate on normalized 0..1 coords) ---
+# --- geometry helpers (normalized 0..1 coords) ---
 
-def _d(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+def _d(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
-
-
-def _hand_scale(h: Hand) -> float:
-    """A resolution-independent size for the hand: wrist -> middle-finger knuckle."""
-    return max(_d(h.landmarks_norm[WRIST], h.landmarks_norm[MIDDLE_MCP]), 1e-6)
 
 
 def _finger_extended(h: Hand, tip: int, pip: int) -> bool:
@@ -87,92 +76,52 @@ def _finger_extended(h: Hand, tip: int, pip: int) -> bool:
     return _d(n[tip], n[WRIST]) > _d(n[pip], n[WRIST])
 
 
-def _thumb_extended(h: Hand) -> bool:
-    """Thumb is out when its tip reaches past the IP joint AND splays away from
-    the index knuckle."""
-    n = h.landmarks_norm
-    reaches = _d(n[THUMB_TIP], n[WRIST]) > _d(n[THUMB_IP], n[WRIST])
-    splayed = _d(n[THUMB_TIP], n[INDEX_MCP]) > config.THUMB_SPLAY_RATIO * _hand_scale(h)
-    return reaches and splayed
-
-
-def is_L_shape(h: Hand) -> bool:
-    """Index + thumb extended, with at least two of middle/ring/pinky curled."""
-    if not _finger_extended(h, INDEX_TIP, INDEX_PIP):
-        return False
-    if not _thumb_extended(h):
-        return False
-    curled = sum(
-        not _finger_extended(h, tip, pip)
-        for tip, pip in ((MIDDLE_TIP, MIDDLE_PIP), (RING_TIP, RING_PIP), (PINKY_TIP, PINKY_PIP))
+def is_fox_sign(h: Hand) -> bool:
+    """Kitsune sign: index + pinky extended (ears), middle + ring folded (snout)."""
+    return (
+        _finger_extended(h, INDEX_TIP, INDEX_PIP)
+        and _finger_extended(h, PINKY_TIP, PINKY_PIP)
+        and not _finger_extended(h, MIDDLE_TIP, MIDDLE_PIP)
+        and not _finger_extended(h, RING_TIP, RING_PIP)
     )
-    return curled >= 2
 
 
-def _seg_angle(h: Hand, i: int, j: int) -> float:
-    """Angle (radians) of the landmark i -> j segment, in image coords."""
-    p = h.landmarks_px
-    return math.atan2(p[j][1] - p[i][1], p[j][0] - p[i][0])
-
-
-def _frame_angle_deg(a: Hand, b: Hand) -> float:
-    """Orientation of the frame's edges = how rotated the 'paper rectangle' is.
-
-    The index fingers form the frame's vertical edges and the thumbs the
-    horizontal ones, so each hand gives us two edge directions. We pool all four
-    (rotating thumb directions 90° to line them up with the indexes) and take a
-    circular mean modulo 180° — orientation, not direction, so opposite-pointing
-    fingers on the two hands reinforce instead of cancel. This rotates with your
-    wrists even when your hands stay in place.
-    """
-    angles = []
-    for h in (a, b):
-        angles.append(_seg_angle(h, INDEX_MCP, INDEX_TIP))
-        angles.append(_seg_angle(h, THUMB_IP, THUMB_TIP) + math.pi / 2)
-    sx = sum(math.cos(2 * t) for t in angles)
-    sy = sum(math.sin(2 * t) for t in angles)
-    raw = math.degrees(0.5 * math.atan2(sy, sx))
-    # A level frame has vertical index fingers (raw ~= 90deg); subtract that
-    # reference and wrap into (-90, 90] so a level frame reads 0 and the value is
-    # the frame's absolute tilt from upright.
-    return (raw % 180.0) - 90.0
-
-
-def _portal_from_hands(a: Hand, b: Hand, frame_shape) -> PortalBox:
-    """Box spanning the framing fingertips of both hands, with a little padding."""
-    keys = [a.landmarks_px[THUMB_TIP], a.landmarks_px[INDEX_TIP],
-            b.landmarks_px[THUMB_TIP], b.landmarks_px[INDEX_TIP]]
-    xs = [p[0] for p in keys]
-    ys = [p[1] for p in keys]
+def _hand_box(h: Hand, frame_shape):
+    """Padded bounding box (pixels) around the whole hand."""
+    xs = [p[0] for p in h.landmarks_px]
+    ys = [p[1] for p in h.landmarks_px]
     x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-
-    h, w = frame_shape[:2]
+    H, W = frame_shape[:2]
     pad_x = int((x1 - x0) * config.PORTAL_PADDING)
     pad_y = int((y1 - y0) * config.PORTAL_PADDING)
     x0 = max(0, x0 - pad_x)
     y0 = max(0, y0 - pad_y)
-    x1 = min(w, x1 + pad_x)
-    y1 = min(h, y1 + pad_y)
-    return PortalBox(x=x0, y=y0, w=x1 - x0, h=y1 - y0,
-                     points=tuple(keys), angle_deg=_frame_angle_deg(a, b))
+    x1 = min(W, x1 + pad_x)
+    y1 = min(H, y1 + pad_y)
+    return x0, y0, x1 - x0, y1 - y0
 
 
-def detect_frame(hands: list[Hand], frame_shape) -> FrameResult:
-    """Detect the two-handed finger-frame and return the portal box if found."""
-    if len(hands) < 2:
-        return FrameResult(False, reason="show both hands")
+def _fox_angle_deg(h: Hand) -> float:
+    """Tilt of the fox from upright: the wrist→ears axis measured from vertical."""
+    wx, wy = h.landmarks_px[WRIST]
+    ix, iy = h.landmarks_px[INDEX_TIP]
+    pkx, pky = h.landmarks_px[PINKY_TIP]
+    ear_mid = ((ix + pkx) / 2.0, (iy + pky) / 2.0)
+    dx, dy = ear_mid[0] - wx, ear_mid[1] - wy
+    return math.degrees(math.atan2(dx, -dy))   # 0 when the ears are straight above the wrist
 
-    a, b = hands[0], hands[1]
-    if not (is_L_shape(a) and is_L_shape(b)):
-        return FrameResult(False, reason="make an L with each hand (thumb + index)")
 
-    box = _portal_from_hands(a, b, frame_shape)
+def detect_fox(hands: list[Hand], frame_shape) -> FrameResult:
+    """Detect the one-handed fox sign and return the ear anchors if found."""
+    if not hands:
+        return FrameResult(False, reason="show your hand")
 
-    # Reject when the hands are basically on top of each other — there's no opening.
-    h, w = frame_shape[:2]
-    min_w = config.PORTAL_MIN_FRAC * w
-    min_h = config.PORTAL_MIN_FRAC * h
-    if box.w < min_w or box.h < min_h:
-        return FrameResult(False, reason="spread your hands apart")
+    h = hands[0]
+    if not is_fox_sign(h):
+        return FrameResult(False, reason="fox sign: index + pinky up, fold middle + ring")
 
-    return FrameResult(True, box=box, reason="FRAME DETECTED")
+    x, y, w, hh = _hand_box(h, frame_shape)
+    ears = sorted([h.landmarks_px[INDEX_TIP], h.landmarks_px[PINKY_TIP]], key=lambda p: p[0])
+    box = PortalBox(x, y, w, hh, angle_deg=_fox_angle_deg(h),
+                    ear_left=tuple(ears[0]), ear_right=tuple(ears[1]))
+    return FrameResult(True, box=box, reason="KON")

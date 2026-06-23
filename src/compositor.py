@@ -30,6 +30,19 @@ def _load_rgba(path) -> np.ndarray:
     return img
 
 
+def _similarity_matrix(s1, s2, d1, d2) -> np.ndarray:
+    """2x3 affine that maps the segment s1->s2 onto d1->d2 (rotation + uniform
+    scale + translation; no shear, so the demon keeps its proportions)."""
+    sx, sy = s2[0] - s1[0], s2[1] - s1[1]
+    dx, dy = d2[0] - d1[0], d2[1] - d1[1]
+    ns = (sx * sx + sy * sy) or 1e-6
+    a = (sx * dx + sy * dy) / ns          # = scale * cos(theta)
+    b = (sx * dy - sy * dx) / ns          # = scale * sin(theta)
+    tx = d1[0] - (a * s1[0] - b * s1[1])
+    ty = d1[1] - (b * s1[0] + a * s1[1])
+    return np.array([[a, -b, tx], [b, a, ty]], dtype=np.float32)
+
+
 def _rotate_rgba(img: np.ndarray, deg: float) -> np.ndarray:
     """Rotate a BGRA image about its center, expanding the canvas so nothing clips.
     Newly exposed pixels are fully transparent."""
@@ -72,11 +85,34 @@ class Compositor:
         self.last_tilt_deg: float = 0.0           # exposed for the debug HUD
 
     def summon(self, frame: np.ndarray, box: PortalBox) -> None:
-        """Scale the demon to fit `box`, tilt it to match your frame, and blend it in.
+        """Place the demon onto the fox-sign hand and blend it in."""
+        if config.ANCHOR_ENABLED:
+            self._summon_anchored(frame, box)
+            return
+        self._summon_oriented(frame, box)
 
-        Tier 1 (oriented placement): the demon is a sticker on the paper your hands
-        frame — its angle is the frame's *absolute* tilt, so a frame held tilted
-        gives a tilted demon, with no lock-on or baseline.
+    def _summon_anchored(self, frame: np.ndarray, box: PortalBox) -> None:
+        """Tier 3 (anchor rig): pin the demon's ears to your index + pinky tips.
+
+        A single similarity transform maps the demon's two ear-tips onto the two
+        fingertip 'ears', so position, scale, and rotation are all derived from
+        where your hand actually is — the fox is *held* by your hand.
+        """
+        h, w = frame.shape[:2]
+        dh, dw = self.demon.shape[:2]
+        ear_l = (config.DEMON_EAR_L_FRAC[0] * dw, config.DEMON_EAR_L_FRAC[1] * dh)
+        ear_r = (config.DEMON_EAR_R_FRAC[0] * dw, config.DEMON_EAR_R_FRAC[1] * dh)
+        target_l, target_r = box.ear_left, box.ear_right
+
+        m = _similarity_matrix(ear_l, ear_r, target_l, target_r)
+        warped = cv2.warpAffine(self.demon, m, (w, h), flags=cv2.INTER_LINEAR,
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        overlay_rgba(frame, warped, 0, 0)
+        self.last_tilt_deg = box.angle_deg
+
+    def _summon_oriented(self, frame: np.ndarray, box: PortalBox) -> None:
+        """Tier 1 (oriented placement): the demon is a sticker on the paper your
+        hands frame — centered, scaled to fit, tilted to the frame's absolute angle.
         """
         dh, dw = self.demon.shape[:2]
         if box.w <= 0 or box.h <= 0:

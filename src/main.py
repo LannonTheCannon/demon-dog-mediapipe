@@ -1,8 +1,8 @@
-"""Entry point — webcam loop: hand tracking → finger-frame → summon the demon.
+"""Entry point — webcam loop: hand tracking → fox sign → summon the demon.
 
-v2: capture → mirror → hand tracking → detect the two-handed finger-frame →
-composite the demon into the portal box. Press 'd' to toggle the debug overlay
-(skeleton + box). This loop stays the spine as the realism ladder gets climbed.
+capture → mirror → hand tracking → detect the one-handed fox sign ("Kon") →
+pin the demon fox's ears to your index + pinky tips. Press 'd' to toggle the
+debug overlay (skeleton + box). This loop stays the spine of the project.
 
 Run:
     python -m src.main              # open the webcam window
@@ -21,7 +21,7 @@ import cv2
 
 from . import config
 from .compositor import Compositor
-from .gesture import FrameResult, PortalBox, detect_frame
+from .gesture import FrameResult, PortalBox, detect_fox
 from .hand_tracker import HAND_CONNECTIONS, Hand, HandTracker
 
 # Landmark indices we'll lean on later (thumb + finger tips). Highlighted now so
@@ -40,7 +40,7 @@ def open_camera(index: int) -> cv2.VideoCapture:
 def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool) -> None:
     """Overlay a little heads-up text so the window is informative, not just raw video."""
     h = frame.shape[0]
-    cv2.putText(frame, "demon-dog  |  v2: summon", (16, 32),
+    cv2.putText(frame, "demon-dog  |  Kon (fox sign)", (16, 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 180), 2, cv2.LINE_AA)
     if config.SHOW_FPS:
         cv2.putText(frame, f"{fps:4.1f} fps   hands: {n_hands}", (16, 60),
@@ -133,7 +133,7 @@ def run(index: int) -> int:
             # Track hands on the same (mirrored) frame we display, so landmarks
             # and the portal line up with what you see.
             hands = tracker.process(frame)
-            gesture = detect_frame(hands, frame.shape)
+            gesture = detect_fox(hands, frame.shape)
 
             # the summon: drop the demon into the portal box
             if gesture.detected and gesture.box is not None:

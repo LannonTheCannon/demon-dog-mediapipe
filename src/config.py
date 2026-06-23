@@ -40,6 +40,13 @@ DEMON_SCALE = 1.0           # demon size as a fraction of the fitted portal box 
 ORIENT_ENABLED = True       # rotate the demon to match the finger-frame's tilt
 ORIENT_SIGN = -1.0          # makes the demon turn the SAME way as your frame; flip to +1.0 if reversed
 
+# --- anchor rig (Tier 3) ---
+ANCHOR_ENABLED = True       # pin the demon's ears to your fingertips (supersedes plain oriented placement)
+# Ear-tip positions inside the demon image, as fractions of (width, height).
+# These match the generated placeholder; update if you swap the art.
+DEMON_EAR_L_FRAC = (0.266, 0.117)
+DEMON_EAR_R_FRAC = (0.734, 0.117)
+
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2
 MIN_DETECTION_CONFIDENCE = 0.6
