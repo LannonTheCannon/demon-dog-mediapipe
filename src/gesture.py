@@ -68,27 +68,83 @@ class FrameResult:
     reason: str = ""
 
 
+class GestureLock:
+    """Hysteresis for the fox sign.
+
+    MediaPipe is confident when the hand faces the camera but uncertain edge-on
+    (a training-data gap). So we lock the sign once it's seen for a few frames,
+    then *hold* the lock through brief dropouts — letting you form the sign facing
+    the camera, then turn to look through the peephole without recognition blinking
+    out. Holds the last good box for use during the held frames.
+    """
+
+    def __init__(self, lock_frames: int, hold_frames: int) -> None:
+        self.lock_frames = lock_frames
+        self.hold_frames = hold_frames
+        self.locked = False
+        self.box: PortalBox | None = None
+        self._hits = 0
+        self._misses = 0
+
+    def update(self, result: FrameResult) -> bool:
+        if result.detected:
+            self._hits += 1
+            self._misses = 0
+            self.box = result.box
+            if self._hits >= self.lock_frames:
+                self.locked = True
+        else:
+            self._misses += 1
+            self._hits = 0
+            if self._misses >= self.hold_frames:
+                self.locked = False
+                self.box = None
+        return self.locked
+
+
 # --- geometry helpers (normalized 0..1 coords) ---
 
 def _d(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _d3(a, b) -> float:
+    """3D distance (includes MediaPipe's z), so the test holds when the hand is
+    turned edge-on and a finger's 2D length foreshortens."""
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
 def _finger_extended(h: Hand, tip: int, pip: int) -> bool:
-    """A finger points away from the palm when its tip is farther from the wrist
-    than its middle joint."""
-    n = h.landmarks_norm
-    return _d(n[tip], n[WRIST]) > _d(n[pip], n[WRIST])
+    """A finger is extended when its tip is clearly farther from the wrist than its
+    middle joint — measured in MediaPipe's TRUE 3D world landmarks (meters), so it
+    holds at any camera angle even when the image landmarks overlap. The margin
+    biases borderline fingers to 'folded' to keep detection steady."""
+    w = h.landmarks_world
+    return _d3(w[tip], w[WRIST]) > _d3(w[pip], w[WRIST]) * config.FINGER_EXTEND_MARGIN
+
+
+def fox_sign_states(h: Hand) -> dict:
+    """The individual conditions of the fox sign — for the on-screen detection debug."""
+    return {
+        "idx_up": _finger_extended(h, INDEX_TIP, INDEX_PIP),
+        "pinky_up": _finger_extended(h, PINKY_TIP, PINKY_PIP),
+        "mid_fold": not _finger_extended(h, MIDDLE_TIP, MIDDLE_PIP),
+        "ring_fold": not _finger_extended(h, RING_TIP, RING_PIP),
+    }
 
 
 def is_fox_sign(h: Hand) -> bool:
-    """Kitsune sign: index + pinky extended (ears), middle + ring folded (snout)."""
-    return (
-        _finger_extended(h, INDEX_TIP, INDEX_PIP)
-        and _finger_extended(h, PINKY_TIP, PINKY_PIP)
-        and not _finger_extended(h, MIDDLE_TIP, MIDDLE_PIP)
-        and not _finger_extended(h, RING_TIP, RING_PIP)
-    )
+    """Recognize the fox sign.
+
+    Approximate mode (default): index + pinky extended is enough — those read
+    reliably even when the hand is edge-on, so the box appears dependably in the
+    looking-through pose. Strict mode also requires middle + ring folded, which the
+    model fumbles under occlusion (config.FOX_REQUIRE_FOLD).
+    """
+    st = fox_sign_states(h)
+    if config.FOX_REQUIRE_FOLD:
+        return all(st.values())
+    return st["idx_up"] and st["pinky_up"]
 
 
 def _hand_box(h: Hand, frame_shape):

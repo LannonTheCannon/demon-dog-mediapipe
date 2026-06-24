@@ -23,7 +23,7 @@ import numpy as np
 
 from . import config
 from .compositor import Compositor
-from .gesture import FrameResult, PortalBox, detect_fox
+from .gesture import FrameResult, GestureLock, PortalBox, detect_fox, fox_sign_states
 from .hand_tracker import HAND_CONNECTIONS, Hand, HandTracker
 
 # Landmark indices we'll lean on later (thumb + finger tips). Highlighted now so
@@ -63,7 +63,7 @@ def find_camera(preferred: int):
     return None, -1
 
 
-def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool) -> None:
+def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool, active: bool) -> None:
     """Overlay a little heads-up text so the window is informative, not just raw video."""
     h = frame.shape[0]
     cv2.putText(frame, "demon-dog  |  Kon (fox sign)", (16, 32),
@@ -72,12 +72,16 @@ def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool)
         cv2.putText(frame, f"{fps:4.1f} fps   hands: {n_hands}", (16, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 180), 1, cv2.LINE_AA)
 
-    # gesture status: green when the frame is locked, amber as a hint otherwise
-    color = (60, 255, 120) if gesture.detected else (60, 200, 255)
-    cv2.putText(frame, gesture.reason, (16, 90),
+    # gesture status: green + locked once held, amber hint otherwise
+    if active:
+        status = "FOX LOCKED  —  press k" if not gesture.detected else "KON  (locked)"
+        color = (60, 255, 120)
+    else:
+        status, color = gesture.reason, (60, 200, 255)
+    cv2.putText(frame, status, (16, 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-    hint = f"q/esc quit   |   k: KON   |   d: debug {'ON' if debug else 'OFF'}   |   s: screenshot"
+    hint = f"q/esc quit   |   k: KON   |   c: camera   |   d: debug {'ON' if debug else 'OFF'}   |   s: shot"
     cv2.putText(frame, hint, (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -194,6 +198,7 @@ def run(index: int) -> int:
     shots = 0
     tracker = HandTracker()
     compositor = Compositor()
+    lock = GestureLock(config.GESTURE_LOCK_FRAMES, config.GESTURE_HOLD_FRAMES)
     try:
         while True:
             ok, frame = cap.read()
@@ -208,23 +213,38 @@ def run(index: int) -> int:
             # and the portal line up with what you see.
             hands = tracker.process(frame)
             gesture = detect_fox(hands, frame.shape)
+            # hysteresis: hold the lock through edge-on dropouts. `box` is the last
+            # good portal even on a frame MediaPipe briefly lost the sign.
+            active = lock.update(gesture)
+            box = lock.box
 
-            # the summon: pin the fox to the hand (paused while an eruption plays)
-            if gesture.detected and gesture.box is not None and not compositor.is_erupting():
-                compositor.summon(frame, gesture.box)
+            # optional preview: pin the fox to the hand before firing (off by default —
+            # canonically the fox only appears on the eruption)
+            if (config.SHOW_PREVIEW and active and box is not None
+                    and not compositor.is_erupting()):
+                compositor.summon(frame, box)
 
             # debug overlays (toggle live with 'd')
             if debug and not compositor.is_erupting():
                 for hand in hands:
                     draw_hand(frame, hand)
-                if gesture.detected and gesture.box is not None:
-                    draw_portal(frame, gesture.box)
-                    draw_cone(frame, gesture.box)
+                # detection diagnostic: per-finger fox-sign conditions for the first hand
+                if hands:
+                    st = fox_sign_states(hands[0])
+                    x0 = 16
+                    for name, ok in st.items():
+                        col = (60, 255, 120) if ok else (60, 120, 255)
+                        cv2.putText(frame, f"{name}:{'Y' if ok else 'N'}", (x0, 210),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
+                        x0 += 150
+                if active and box is not None:
+                    draw_portal(frame, box)
+                    draw_cone(frame, box)
                     cv2.putText(frame, f"tilt: {compositor.last_tilt_deg:+.0f} deg", (16, 118),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 200, 255), 1, cv2.LINE_AA)
                     # diagnostic readout: handedness + de-mirrored normal
                     if hands:
-                        n = gesture.box.normal
+                        n = box.normal
                         cv2.putText(frame,
                                     f"{hands[0].label}  n=({n[0]:+.2f},{n[1]:+.2f},{n[2]:+.2f})",
                                     (16, 174), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
@@ -240,7 +260,7 @@ def run(index: int) -> int:
             if dt > 0:
                 fps = 0.9 * fps + 0.1 * (1.0 / dt)  # smoothed
 
-            draw_hud(frame, fps, len(hands), gesture, debug)
+            draw_hud(frame, fps, len(hands), gesture, debug, active)
             cv2.imshow(config.WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
@@ -251,8 +271,15 @@ def run(index: int) -> int:
             if key == ord("s"):
                 shots += 1
                 save_screenshot(frame, shots)
-            if key == config.ERUPT_KEY and gesture.detected and gesture.box is not None:
-                compositor.trigger_eruption(gesture.box)
+            if key == config.ERUPT_KEY and active and box is not None:
+                compositor.trigger_eruption(box)
+            if key == ord("c"):   # cycle to the next live camera (e.g. off the iPhone)
+                cap.release()
+                cap, used = find_camera((used + 1) % config.CAMERA_PROBE_MAX)
+                if cap is None:
+                    print("ERROR: no camera after switch", file=sys.stderr)
+                    return 1
+                print(f"[camera] switched to index {used}")
             # window closed via the title-bar X
             if cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                 break

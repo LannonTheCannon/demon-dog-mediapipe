@@ -35,6 +35,7 @@ WINDOW_NAME = "demon-dog"
 SHOW_FPS = True
 QUIT_KEYS = (ord("q"), 27)   # 'q' or ESC
 DEBUG_OVERLAY = True         # draw hand skeleton + portal box (toggle live with 'd')
+SHOW_PREVIEW = False         # show the fox pinned on the hand before firing (off = canonical: only on 'k')
 
 # --- summon (v2) ---
 DEMON_SCALE = 1.0           # demon size as a fraction of the fitted portal box (tune to taste)
@@ -73,6 +74,21 @@ ERUPT_FADE_START = 0.7     # progress (0..1) at which it begins fading out
 MAX_HANDS = 2
 MIN_DETECTION_CONFIDENCE = 0.6
 MIN_TRACKING_CONFIDENCE = 0.5
+
+# --- landmark smoothing (One Euro filter) — tames jitter when fingers occlude edge-on ---
+SMOOTHING_ENABLED = True
+SMOOTH_MIN_CUTOFF = 1.0    # lower = smoother but more lag; higher = snappier but more jitter
+SMOOTH_BETA = 0.5          # higher = less lag during fast hand motion
+
+# --- fox-sign detection ---
+FINGER_EXTEND_MARGIN = 1.0    # tip past pip = "extended"; ~1.0 makes index/pinky "up" easy to detect
+FOX_REQUIRE_FOLD = False      # False = approximate: index + pinky up is enough (reliable edge-on).
+                              # True  = strict: also require middle + ring folded (flaky when occluded).
+
+# --- gesture lock (ride through MediaPipe's edge-on uncertainty) ---
+GESTURE_LOCK_FRAMES = 2     # consecutive detections needed to lock the fox sign
+GESTURE_HOLD_FRAMES = 30    # frames to hold the lock through dropouts before releasing (~1s @30fps)
+                              # (>1 biases borderline fingers to "folded" → steadier edge-on)
 
 # --- finger-frame gesture (v1) ---
 THUMB_SPLAY_RATIO = 0.5   # thumb tip must sit this far from the index knuckle (× hand size) to count as "out"

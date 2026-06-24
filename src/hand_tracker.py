@@ -28,6 +28,7 @@ from mediapipe.tasks.python.vision import (
 
 from . import config
 from .models import ensure_hand_model
+from .smoothing import LandmarkSmoother
 
 # Standard 21-point hand topology (pairs of landmark indices), for drawing the
 # skeleton. Hardcoded because the Tasks API doesn't expose the old
@@ -47,8 +48,9 @@ class Hand:
     """One detected hand, decoupled from MediaPipe's types."""
     label: str                       # 'Left' / 'Right' (see mirroring note below)
     score: float                     # handedness confidence 0..1
-    landmarks_px: list[tuple[int, int]]               # 21 (x, y) pixel coords
-    landmarks_norm: list[tuple[float, float, float]]  # 21 (x, y, z) in 0..1
+    landmarks_px: list[tuple[int, int]]               # 21 (x, y) pixel coords — for drawing/placement
+    landmarks_norm: list[tuple[float, float, float]]  # 21 (x, y, z) image-normalized 0..1
+    landmarks_world: list[tuple[float, float, float]] # 21 (x, y, z) TRUE 3D (meters) — for recognition
 
     def point(self, i: int) -> tuple[int, int]:
         """Pixel coordinate of landmark `i` (convenience for gesture code)."""
@@ -83,6 +85,10 @@ class HandTracker:
         )
         self._landmarker = HandLandmarker.create_from_options(options)
         self._last_ts_ms = -1   # VIDEO mode requires strictly increasing timestamps
+        self._smoother = (
+            LandmarkSmoother(config.SMOOTH_MIN_CUTOFF, config.SMOOTH_BETA)
+            if config.SMOOTHING_ENABLED else None
+        )
 
     def process(self, frame_bgr) -> list[Hand]:
         """Detect hands in a BGR frame. Returns [] when none are found."""
@@ -101,6 +107,7 @@ class HandTracker:
         if not result.hand_landmarks:
             return hands
 
+        world = result.hand_world_landmarks or []
         for i, lms in enumerate(result.hand_landmarks):
             label, score = "Unknown", 0.0
             if result.handedness and i < len(result.handedness):
@@ -109,9 +116,19 @@ class HandTracker:
                 if self._mirrored:   # undo the mirror so the label matches the real hand
                     label = {"Left": "Right", "Right": "Left"}.get(label, label)
 
-            px = [(int(p.x * w), int(p.y * h)) for p in lms]
             norm = [(p.x, p.y, p.z) for p in lms]
-            hands.append(Hand(label=label, score=score, landmarks_px=px, landmarks_norm=norm))
+            wl = world[i] if i < len(world) else lms   # true 3D (meters) for recognition
+            world_pts = [(p.x, p.y, p.z) for p in wl]
+
+            if self._smoother is not None:
+                t = ts_ms / 1000.0
+                norm = self._smoother.smooth(("n", i), norm, t)
+                world_pts = self._smoother.smooth(("w", i), world_pts, t)
+
+            # derive pixels from the (smoothed) normalized landmarks
+            px = [(int(x * w), int(y * h)) for (x, y, _z) in norm]
+            hands.append(Hand(label=label, score=score, landmarks_px=px,
+                              landmarks_norm=norm, landmarks_world=world_pts))
 
         return hands
 
