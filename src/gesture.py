@@ -23,7 +23,7 @@ THUMB_TIP = 4
 INDEX_MCP, INDEX_PIP, INDEX_TIP = 5, 6, 8
 MIDDLE_MCP, MIDDLE_PIP, MIDDLE_TIP = 9, 10, 12
 RING_PIP, RING_TIP = 14, 16
-PINKY_PIP, PINKY_TIP = 18, 20
+PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 
 
 @dataclass
@@ -42,6 +42,10 @@ class PortalBox:
     ear_left: tuple[int, int] = (0, 0)
     ear_right: tuple[int, int] = (0, 0)
     mouth: tuple[int, int] = (0, 0)    # the puppet's mouth (thumb + folded fingers) — pins the snout
+    hole_center: tuple[int, int] = (0, 0)   # palm/hole center — where the fox will erupt from
+    aim: tuple[float, float] = (0.0, 0.0)   # screen-space unit vector the hole points toward
+    facing: float = 1.0                     # |normal.z|: ~1 = palm flat to camera, ~0 = looking through
+    normal: tuple[float, float, float] = (0.0, 0.0, 1.0)   # full 3D palm normal (for the aim cone)
 
     @property
     def center(self) -> tuple[int, int]:
@@ -102,6 +106,24 @@ def _hand_box(h: Hand, frame_shape):
     return x0, y0, x1 - x0, y1 - y0
 
 
+def hand_normal(h: Hand) -> tuple[float, float, float]:
+    """Unit normal of the palm plane, from 3D landmarks (uses MediaPipe's z).
+
+    Spanned by wrist->index_knuckle and wrist->pinky_knuckle. The (x, y) part is
+    the screen-space direction the palm faces; the z part says how much it points
+    toward/away from the camera.
+    """
+    n = h.landmarks_norm
+    w, i, p = n[WRIST], n[INDEX_MCP], n[PINKY_MCP]
+    v1 = (i[0] - w[0], i[1] - w[1], i[2] - w[2])
+    v2 = (p[0] - w[0], p[1] - w[1], p[2] - w[2])
+    cx = v1[1] * v2[2] - v1[2] * v2[1]
+    cy = v1[2] * v2[0] - v1[0] * v2[2]
+    cz = v1[0] * v2[1] - v1[1] * v2[0]
+    mag = math.sqrt(cx * cx + cy * cy + cz * cz) or 1e-6
+    return (cx / mag, cy / mag, cz / mag)
+
+
 def _fox_angle_deg(h: Hand) -> float:
     """Tilt of the fox from upright: the wrist→ears axis measured from vertical."""
     wx, wy = h.landmarks_px[WRIST]
@@ -131,6 +153,17 @@ def detect_fox(hands: list[Hand], frame_shape) -> FrameResult:
     fold = ((mx + rx) / 2.0, (my + ry) / 2.0)
     mouth = (int((tx + fold[0]) / 2.0), int((ty + fold[1]) / 2.0))
 
+    # hole/palm center (eruption origin) = centroid of the palm knuckles + wrist
+    palm_ids = (WRIST, INDEX_MCP, MIDDLE_MCP, PINKY_MCP)
+    hcx = int(sum(h.landmarks_px[j][0] for j in palm_ids) / len(palm_ids))
+    hcy = int(sum(h.landmarks_px[j][1] for j in palm_ids) / len(palm_ids))
+
+    # aim: screen-space direction the hole points, from the palm normal
+    nx, ny, nz = hand_normal(h)
+    mag2d = math.hypot(nx, ny) or 1e-6
+    aim = (nx / mag2d, ny / mag2d)
+
     box = PortalBox(x, y, w, hh, angle_deg=_fox_angle_deg(h),
-                    ear_left=tuple(ears[0]), ear_right=tuple(ears[1]), mouth=mouth)
+                    ear_left=tuple(ears[0]), ear_right=tuple(ears[1]), mouth=mouth,
+                    hole_center=(hcx, hcy), aim=aim, facing=abs(nz), normal=(nx, ny, nz))
     return FrameResult(True, box=box, reason="KON")

@@ -2,6 +2,9 @@
 models/
 *.task
 
+# demon-dog: screenshots saved with the 's' key (review artifacts)
+captures/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

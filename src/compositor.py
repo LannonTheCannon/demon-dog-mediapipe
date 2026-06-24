@@ -30,16 +30,31 @@ def _load_rgba(path) -> np.ndarray:
     return img
 
 
-def _similarity_matrix(s1, s2, d1, d2) -> np.ndarray:
-    """2x3 affine that maps the segment s1->s2 onto d1->d2 (rotation + uniform
-    scale + translation; no shear, so the demon keeps its proportions)."""
-    sx, sy = s2[0] - s1[0], s2[1] - s1[1]
-    dx, dy = d2[0] - d1[0], d2[1] - d1[1]
-    ns = (sx * sx + sy * sy) or 1e-6
-    a = (sx * dx + sy * dy) / ns          # = scale * cos(theta)
-    b = (sx * dy - sy * dx) / ns          # = scale * sin(theta)
-    tx = d1[0] - (a * s1[0] - b * s1[1])
-    ty = d1[1] - (b * s1[0] + a * s1[1])
+def _similarity_fit(src, dst, weights=None) -> np.ndarray:
+    """Best-fit 2x3 similarity (rotation + uniform scale + translation, NO shear)
+    mapping src onto dst by weighted least squares.
+
+    With 2 points it maps them exactly; with 3 (ears + snout) it finds the closest
+    undistorted placement. Weights let the ears dominate so they pin near the
+    fingertips while the snout only nudges orientation.
+    """
+    n = len(src)
+    w = weights if weights is not None else [1.0] * n
+    sw = sum(w) or 1e-6
+    msx = sum(wi * p[0] for wi, p in zip(w, src)) / sw
+    msy = sum(wi * p[1] for wi, p in zip(w, src)) / sw
+    mdx = sum(wi * p[0] for wi, p in zip(w, dst)) / sw
+    mdy = sum(wi * p[1] for wi, p in zip(w, dst)) / sw
+    num_a = num_b = den = 0.0
+    for wi, (sx, sy), (dx, dy) in zip(w, src, dst):
+        sx -= msx; sy -= msy; dx -= mdx; dy -= mdy
+        num_a += wi * (sx * dx + sy * dy)
+        num_b += wi * (sx * dy - sy * dx)
+        den += wi * (sx * sx + sy * sy)
+    den = den or 1e-6
+    a, b = num_a / den, num_b / den       # scale*cos, scale*sin
+    tx = mdx - (a * msx - b * msy)
+    ty = mdy - (b * msx + a * msy)
     return np.array([[a, -b, tx], [b, a, ty]], dtype=np.float32)
 
 
@@ -104,13 +119,14 @@ class Compositor:
         ear_l = (config.DEMON_EAR_L_FRAC[0] * dw, config.DEMON_EAR_L_FRAC[1] * dh)
         ear_r = (config.DEMON_EAR_R_FRAC[0] * dw, config.DEMON_EAR_R_FRAC[1] * dh)
 
+        src = [ear_l, ear_r]
+        dst = [box.ear_left, box.ear_right]
+        weights = [1.0, 1.0]
         if config.ANCHOR_USE_SNOUT:
-            snout = (config.DEMON_SNOUT_FRAC[0] * dw, config.DEMON_SNOUT_FRAC[1] * dh)
-            src = np.float32([ear_l, ear_r, snout])
-            dst = np.float32([box.ear_left, box.ear_right, box.mouth])
-            m = cv2.getAffineTransform(src, dst)
-        else:
-            m = _similarity_matrix(ear_l, ear_r, box.ear_left, box.ear_right)
+            src.append((config.DEMON_SNOUT_FRAC[0] * dw, config.DEMON_SNOUT_FRAC[1] * dh))
+            dst.append(box.mouth)
+            weights.append(config.SNOUT_WEIGHT)
+        m = _similarity_fit(src, dst, weights)   # no-shear: keeps the fox's proportions
 
         warped = cv2.warpAffine(self.demon, m, (w, h), flags=cv2.INTER_LINEAR,
                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))

@@ -14,10 +14,12 @@ Press 'q' or ESC to quit the window.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 
 import cv2
+import numpy as np
 
 from . import config
 from .compositor import Compositor
@@ -51,7 +53,7 @@ def draw_hud(frame, fps: float, n_hands: int, gesture: FrameResult, debug: bool)
     cv2.putText(frame, gesture.reason, (16, 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-    hint = f"q/esc quit   |   d: debug overlay {'ON' if debug else 'OFF'}"
+    hint = f"q/esc quit   |   d: debug {'ON' if debug else 'OFF'}   |   s: screenshot"
     cv2.putText(frame, hint, (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -62,6 +64,38 @@ def draw_portal(frame, box: PortalBox) -> None:
     cv2.rectangle(frame, box.p1, box.p2, (180, 220, 255), 1, cv2.LINE_AA)  # inner highlight
     cx, cy = box.center
     cv2.drawMarker(frame, (cx, cy), (200, 230, 255), cv2.MARKER_CROSS, 18, 1, cv2.LINE_AA)
+
+
+def draw_cone(frame, box: PortalBox) -> None:
+    """RPG-style facing wedge: a translucent light-blue cone from the snout pointing
+    where the fox's nose points.
+
+    Direction is the snout vector (mouth - ear midpoint) — pure on-screen geometry,
+    so it always matches the visible snout and never mirrors between hands (the old
+    palm-normal cone flipped sign by handedness).
+    """
+    ex = (box.ear_left[0] + box.ear_right[0]) / 2.0
+    ey = (box.ear_left[1] + box.ear_right[1]) / 2.0
+    mx, my = float(box.mouth[0]), float(box.mouth[1])
+    dx, dy = mx - ex, my - ey
+    dist = math.hypot(dx, dy) or 1e-6
+    ux, uy = dx / dist, dy / dist                      # snout direction (face -> nose)
+
+    half = math.radians(config.CONE_HALF_ANGLE)
+    cos_h, sin_h = math.cos(half), math.sin(half)
+    L = config.CONE_LENGTH
+    edge_l = (ux * cos_h - uy * sin_h, ux * sin_h + uy * cos_h)
+    edge_r = (ux * cos_h + uy * sin_h, -ux * sin_h + uy * cos_h)
+    apex = (int(mx), int(my))                          # start at the snout, fan outward
+    p_l = (int(mx + edge_l[0] * L), int(my + edge_l[1] * L))
+    p_r = (int(mx + edge_r[0] * L), int(my + edge_r[1] * L))
+
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [np.array([apex, p_l, p_r], np.int32)], config.CONE_COLOR)
+    cv2.addWeighted(overlay, config.CONE_ALPHA, frame, 1.0 - config.CONE_ALPHA, 0, frame)
+    cv2.line(frame, apex, p_l, config.CONE_COLOR, 1, cv2.LINE_AA)
+    cv2.line(frame, apex, p_r, config.CONE_COLOR, 1, cv2.LINE_AA)
+    cv2.line(frame, p_l, p_r, config.CONE_COLOR, 1, cv2.LINE_AA)
 
 
 def draw_hand(frame, hand: Hand) -> None:
@@ -82,6 +116,15 @@ def draw_hand(frame, hand: Hand) -> None:
     # label near the wrist
     cv2.putText(frame, f"{hand.label} {hand.score:.0%}", (px[0][0] - 10, px[0][1] + 24),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 180), 1, cv2.LINE_AA)
+
+
+def save_screenshot(frame, count: int):
+    """Save the rendered frame to captures/ so the result can be reviewed offline."""
+    config.CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.CAPTURES_DIR / f"capture_{count:03d}.png"
+    cv2.imwrite(str(path), frame)
+    print(f"[screenshot] saved {path}")
+    return path
 
 
 def selftest(index: int, n_frames: int = 5) -> int:
@@ -118,6 +161,7 @@ def run(index: int) -> int:
     prev = time.perf_counter()
     fps = 0.0
     debug = config.DEBUG_OVERLAY
+    shots = 0
     tracker = HandTracker()
     compositor = Compositor()
     try:
@@ -145,6 +189,7 @@ def run(index: int) -> int:
                     draw_hand(frame, hand)
                 if gesture.detected and gesture.box is not None:
                     draw_portal(frame, gesture.box)
+                    draw_cone(frame, gesture.box)
                     cv2.putText(frame, f"tilt: {compositor.last_tilt_deg:+.0f} deg", (16, 118),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 200, 255), 1, cv2.LINE_AA)
 
@@ -162,6 +207,9 @@ def run(index: int) -> int:
                 break
             if key == ord("d"):
                 debug = not debug
+            if key == ord("s"):
+                shots += 1
+                save_screenshot(frame, shots)
             # window closed via the title-bar X
             if cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                 break

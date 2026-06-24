@@ -14,6 +14,7 @@ DEMON_PNG = ASSETS_DIR / "demon.png"
 
 # --- models (MediaPipe Tasks) ---
 MODELS_DIR = ROOT / "models"
+CAPTURES_DIR = ROOT / "captures"   # screenshots saved with the 's' key
 HAND_MODEL_PATH = MODELS_DIR / "hand_landmarker.task"
 HAND_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -49,6 +50,14 @@ DEMON_EAR_R_FRAC = (0.734, 0.117)
 DEMON_SNOUT_FRAC = (0.500, 0.887)   # the nose/snout — the third anchor that pins the face direction
 
 ANCHOR_USE_SNOUT = True             # 3-point pin (ears + snout). False = 2-point (ears only).
+SNOUT_WEIGHT = 0.35                 # how much the snout pulls vs the ears (lower = ears pin tighter)
+
+# --- facing cone (RPG-style, points where the snout points) ---
+AIM_FLAT_FACING = 0.6      # |normal.z| above this = palm flat to camera; below = looking through the hole
+CONE_LENGTH = 150          # how far the facing wedge extends past the snout (px)
+CONE_HALF_ANGLE = 26       # half-width of the wedge (degrees)
+CONE_ALPHA = 0.35          # translucency of the wedge fill
+CONE_COLOR = (255, 210, 130)   # light blue (BGR)
 
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2
