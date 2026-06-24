@@ -22,8 +22,10 @@ HAND_MODEL_URL = (
 )
 
 # --- camera ---
-CAM_INDEX = 1            # built-in FaceTime camera. (Index 0 is the iPhone Continuity Camera here.)
-                         # Run scripts/probe_cameras.py to re-check if this ever changes.
+CAM_INDEX = 0            # preferred camera index; auto-detect falls back if it's black/missing.
+                         # (The iPhone Continuity Camera grabs index 0 when connected and is black
+                         #  when idle — so we probe for the first camera delivering real pixels.)
+CAMERA_PROBE_MAX = 4     # how many indices to probe when the preferred one isn't usable
 REQ_WIDTH = 1280         # requested capture width (the driver may pick the nearest supported)
 REQ_HEIGHT = 720         # requested capture height
 MIRROR = True            # flip horizontally so the feed reads like a mirror (selfie view)
@@ -52,12 +54,20 @@ DEMON_SNOUT_FRAC = (0.500, 0.887)   # the nose/snout — the third anchor that p
 ANCHOR_USE_SNOUT = True             # 3-point pin (ears + snout). False = 2-point (ears only).
 SNOUT_WEIGHT = 0.35                 # how much the snout pulls vs the ears (lower = ears pin tighter)
 
-# --- facing cone (RPG-style, points where the snout points) ---
+# --- facing cone (3D, points where the palm/hole faces) ---
 AIM_FLAT_FACING = 0.6      # |normal.z| above this = palm flat to camera; below = looking through the hole
-CONE_LENGTH = 150          # how far the facing wedge extends past the snout (px)
-CONE_HALF_ANGLE = 26       # half-width of the wedge (degrees)
-CONE_ALPHA = 0.35          # translucency of the wedge fill
+CONE_LENGTH = 150          # how far the cone extends along the facing direction (px)
+CONE_RADIUS = 65           # radius of the cone's base (px)
+CONE_ALPHA = 0.30          # translucency of the cone fill
 CONE_COLOR = (255, 210, 130)   # light blue (BGR)
+NORMAL_SIGN = 1.0          # global flip if the cone points opposite the snout (try -1.0)
+
+# --- eruption ("Kon") ---
+ERUPT_KEY = ord("k")       # press to summon (voice "Kon" comes later)
+ERUPT_DURATION = 0.85      # seconds the eruption animation plays
+ERUPT_MAX_SCALE = 5.0      # the fox grows to this multiple of its on-hand size
+ERUPT_LUNGE = 220          # px it lunges along the snout/facing direction
+ERUPT_FADE_START = 0.6     # progress (0..1) at which it begins fading out
 
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2

@@ -158,8 +158,11 @@ def detect_fox(hands: list[Hand], frame_shape) -> FrameResult:
     hcx = int(sum(h.landmarks_px[j][0] for j in palm_ids) / len(palm_ids))
     hcy = int(sum(h.landmarks_px[j][1] for j in palm_ids) / len(palm_ids))
 
-    # aim: screen-space direction the hole points, from the palm normal
+    # palm normal — de-mirrored by handedness (the cross product flips sign between
+    # left/right hands, which was the cone's left-hand mirror bug).
     nx, ny, nz = hand_normal(h)
+    sign = config.NORMAL_SIGN * (1.0 if h.label == "Right" else -1.0)
+    nx, ny, nz = nx * sign, ny * sign, nz * sign
     mag2d = math.hypot(nx, ny) or 1e-6
     aim = (nx / mag2d, ny / mag2d)
 

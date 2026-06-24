@@ -9,6 +9,7 @@ video. Tier 1+ (oriented placement, anchored rig, mesh warp) replaces the body o
 from __future__ import annotations
 
 import math
+import time
 
 import cv2
 import numpy as np
@@ -98,6 +99,7 @@ class Compositor:
     def __init__(self, asset_path=config.DEMON_PNG) -> None:
         self.demon = _load_rgba(asset_path)
         self.last_tilt_deg: float = 0.0           # exposed for the debug HUD
+        self._erupt: dict | None = None           # active eruption animation state
 
     def summon(self, frame: np.ndarray, box: PortalBox) -> None:
         """Place the demon onto the fox-sign hand and blend it in."""
@@ -155,3 +157,68 @@ class Compositor:
         ox = cx - demon.shape[1] // 2
         oy = cy - demon.shape[0] // 2
         overlay_rgba(frame, demon, ox, oy)
+
+    # --- eruption ("Kon") ---
+
+    def _render_fox(self, frame, center, scale, angle_deg, alpha=1.0) -> None:
+        """Draw the fox at an arbitrary center/scale/rotation with a global alpha."""
+        dh, dw = self.demon.shape[:2]
+        nw, nh = max(1, int(dw * scale)), max(1, int(dh * scale))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        img = cv2.resize(self.demon, (nw, nh), interpolation=interp)
+        if angle_deg:
+            img = _rotate_rgba(img, angle_deg)
+        if alpha < 1.0:
+            img = img.copy()
+            img[:, :, 3] = (img[:, :, 3].astype(np.float32) * alpha).astype(img.dtype)
+        ox = int(center[0] - img.shape[1] / 2)
+        oy = int(center[1] - img.shape[0] / 2)
+        overlay_rgba(frame, img, ox, oy)
+
+    def trigger_eruption(self, box: PortalBox) -> None:
+        """Start the Kon eruption from the current fox sign: capture where/which way
+        to launch, then `draw_eruption` plays it out over the next frames."""
+        dw = self.demon.shape[1]
+        ear_span_demon = (config.DEMON_EAR_R_FRAC[0] - config.DEMON_EAR_L_FRAC[0]) * dw
+        ear_span_screen = math.hypot(box.ear_right[0] - box.ear_left[0],
+                                     box.ear_right[1] - box.ear_left[1]) or 1.0
+        base_scale = ear_span_screen / (ear_span_demon or 1.0)
+
+        ex = (box.ear_left[0] + box.ear_right[0]) / 2.0
+        ey = (box.ear_left[1] + box.ear_right[1]) / 2.0
+        dx, dy = box.mouth[0] - ex, box.mouth[1] - ey
+        d = math.hypot(dx, dy) or 1.0
+
+        self._erupt = {
+            "t0": time.perf_counter(),
+            "origin": box.hole_center,
+            "dir": (dx / d, dy / d),                       # snout/facing direction
+            "scale": base_scale,
+            "angle": box.angle_deg * config.ORIENT_SIGN,
+        }
+
+    def is_erupting(self) -> bool:
+        return self._erupt is not None
+
+    def draw_eruption(self, frame: np.ndarray) -> bool:
+        """Render the in-progress eruption. Returns True while it's still playing."""
+        if self._erupt is None:
+            return False
+        e = self._erupt
+        p = (time.perf_counter() - e["t0"]) / config.ERUPT_DURATION
+        if p >= 1.0:
+            self._erupt = None
+            return False
+
+        ease = 1.0 - (1.0 - p) ** 3                        # ease-out: fast burst, soft finish
+        scale = e["scale"] * (1.0 + (config.ERUPT_MAX_SCALE - 1.0) * ease)
+        lunge = config.ERUPT_LUNGE * ease
+        cx = e["origin"][0] + e["dir"][0] * lunge
+        cy = e["origin"][1] + e["dir"][1] * lunge
+        if p < config.ERUPT_FADE_START:
+            alpha = 1.0
+        else:
+            alpha = max(0.0, (1.0 - p) / (1.0 - config.ERUPT_FADE_START))
+
+        self._render_fox(frame, (cx, cy), scale, e["angle"], alpha)
+        return True
