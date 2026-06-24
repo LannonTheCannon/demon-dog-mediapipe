@@ -66,8 +66,8 @@ NORMAL_SIGN = 1.0          # global flip if the cone points opposite the snout (
 ERUPT_KEY = ord("k")       # press to summon (voice "Kon" comes later)
 ERUPT_DURATION = 0.85      # seconds the eruption animation plays
 ERUPT_MAX_SCALE = 5.0      # the fox grows to this multiple of its on-hand size
-ERUPT_LUNGE = 220          # px it lunges along the snout/facing direction
-ERUPT_FADE_START = 0.6     # progress (0..1) at which it begins fading out
+ERUPT_ENTRY_DIST = 950     # px off-screen it starts, flying in along the facing direction
+ERUPT_FADE_START = 0.7     # progress (0..1) at which it begins fading out
 
 # --- hand tracking (used from v0 onward; harmless to define now) ---
 MAX_HANDS = 2

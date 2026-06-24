@@ -176,23 +176,31 @@ class Compositor:
         overlay_rgba(frame, img, ox, oy)
 
     def trigger_eruption(self, box: PortalBox) -> None:
-        """Start the Kon eruption from the current fox sign: capture where/which way
-        to launch, then `draw_eruption` plays it out over the next frames."""
+        """Start the Kon eruption: the fox flies in from off-screen along the facing
+        direction and lands on the hand. Captured here; `draw_eruption` plays it out."""
         dw = self.demon.shape[1]
         ear_span_demon = (config.DEMON_EAR_R_FRAC[0] - config.DEMON_EAR_L_FRAC[0]) * dw
         ear_span_screen = math.hypot(box.ear_right[0] - box.ear_left[0],
                                      box.ear_right[1] - box.ear_left[1]) or 1.0
         base_scale = ear_span_screen / (ear_span_demon or 1.0)
 
-        ex = (box.ear_left[0] + box.ear_right[0]) / 2.0
-        ey = (box.ear_left[1] + box.ear_right[1]) / 2.0
-        dx, dy = box.mouth[0] - ex, box.mouth[1] - ey
-        d = math.hypot(dx, dy) or 1.0
+        # entry direction: the 3D facing's screen projection when looking through the
+        # hole; fall back to the snout direction when the palm faces the camera.
+        nx, ny, _ = box.normal
+        m = math.hypot(nx, ny)
+        if m > 0.25:
+            dir_x, dir_y = nx / m, ny / m
+        else:
+            ex = (box.ear_left[0] + box.ear_right[0]) / 2.0
+            ey = (box.ear_left[1] + box.ear_right[1]) / 2.0
+            sx, sy = box.mouth[0] - ex, box.mouth[1] - ey
+            sm = math.hypot(sx, sy) or 1.0
+            dir_x, dir_y = sx / sm, sy / sm
 
         self._erupt = {
             "t0": time.perf_counter(),
-            "origin": box.hole_center,
-            "dir": (dx / d, dy / d),                       # snout/facing direction
+            "end": box.hole_center,                        # where it lands (the hand)
+            "dir": (dir_x, dir_y),                         # off-screen entry side
             "scale": base_scale,
             "angle": box.angle_deg * config.ORIENT_SIGN,
         }
@@ -210,11 +218,13 @@ class Compositor:
             self._erupt = None
             return False
 
-        ease = 1.0 - (1.0 - p) ** 3                        # ease-out: fast burst, soft finish
-        scale = e["scale"] * (1.0 + (config.ERUPT_MAX_SCALE - 1.0) * ease)
-        lunge = config.ERUPT_LUNGE * ease
-        cx = e["origin"][0] + e["dir"][0] * lunge
-        cy = e["origin"][1] + e["dir"][1] * lunge
+        ease = 1.0 - (1.0 - p) ** 3                        # ease-out: fast rush, soft landing
+        # fly in from off-screen (end + dir*DIST) to the hand (end)
+        dist = config.ERUPT_ENTRY_DIST * (1.0 - ease)
+        cx = e["end"][0] + e["dir"][0] * dist
+        cy = e["end"][1] + e["dir"][1] * dist
+        # already large on entry (it's a giant), growing as it lands
+        scale = e["scale"] * config.ERUPT_MAX_SCALE * (0.55 + 0.45 * ease)
         if p < config.ERUPT_FADE_START:
             alpha = 1.0
         else:
